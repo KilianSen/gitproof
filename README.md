@@ -55,25 +55,28 @@ npm run build && npm run serve
 ## Endpoint
 
 ```
-GET /gitproof.svg?repo=<owner/repo|git-url|local-path>&from=<ref>&to=<ref>&user=<name|email>
+GET /gitproof.svg?repo=<owner/repo|git-url|local-path>&to=<ref>&user=<name|email>[&from=<ref>]
 ```
 
 | Param  | Meaning                                                                 |
 |--------|-------------------------------------------------------------------------|
 | `repo` | `owner/repo` (assumed GitHub), any git URL, or an existing local path.  |
-| `from` | Start ref — **exclusive** (the commit just *before* your first change). |
 | `to`   | End ref — **inclusive**.                                                |
 | `user` | Matched **case-insensitively** against author name *and* email.         |
+| `from` | Optional. Start ref — **exclusive** (the commit just *before* your first change). **Omit it for the whole repo**, root commit included. |
 | `files`| Optional. `N` caps the file list to the N most-changed (rest shown as "+ N more files"); `all` or omitted lists every file. |
 | `others`| Optional. `hide` removes other contributors' commits from the branch graph; omitted/`squash` collapses each run into one "⋯ N commits by others" node. |
 
-Range semantics are git's `from..to`: commits reachable from `to` but not from
-`from`. Refs can be SHAs, tags, or branch names.
+With `from`, the range is git's `from..to` (commits reachable from `to` but not
+`from`). Without it, the range is everything reachable from `to` — the root
+commit is included, which a `from..to` range can never do (git has no ref for
+"before the first commit"). Refs can be SHAs, tags, or branch names.
 
 Examples:
 
 ```
-/gitproof.svg?repo=torvalds/linux&from=v6.6&to=v6.7&user=Linus
+/gitproof.svg?repo=torvalds/linux&to=HEAD&user=Linus                    # whole repo
+/gitproof.svg?repo=torvalds/linux&from=v6.6&to=v6.7&user=Linus          # a range
 /gitproof.svg?repo=/Users/me/code/thesis-project&from=abc123&to=HEAD&user=me@uni.edu
 ```
 
@@ -86,28 +89,29 @@ it into the repo — no running service required. The CLI takes the same inputs 
 the endpoint:
 
 ```sh
-# The git+https URL forces an anonymous HTTPS clone (the `github:` shorthand
-# resolves to SSH, which unauthenticated CI runners can't use).
+# Whole repo (root included) — the git+https URL forces an anonymous HTTPS clone
+# (the `github:` shorthand resolves to SSH, which CI runners can't use).
 npx --yes git+https://github.com/KilianSen/gitproof.git \
-  --repo . --from v1.0.0 --to HEAD --user you@example.com --out docs/contrib.svg
+  --repo . --user you@example.com --out docs/contrib.svg
 ```
 
 | Flag | Env fallback | Default | Meaning |
 |------|--------------|---------|---------|
 | `--repo` | `GITPROOF_REPO` | `.` | `owner/repo`, git URL, or local path — usually the checkout. |
-| `--from` | `GITPROOF_FROM` | *(required)* | Start ref, **exclusive**. |
 | `--to` | `GITPROOF_TO` | `HEAD` | End ref, **inclusive**. |
 | `--user` | `GITPROOF_USER` | *(required)* | Author, matched case-insensitively (name + email). |
+| `--from` | `GITPROOF_FROM` | *(none = whole repo)* | Start ref, **exclusive**. Omit for the whole history, root included. |
 | `--out`, `-o` | `GITPROOF_OUT` | `gitproof.svg` | Output path (parent dirs are created). |
 | `--files` | `GITPROOF_FILES` | `all` | Cap the file list to N. |
 | `--others` | `GITPROOF_OTHERS` | `squash` | `hide` drops other contributors from the branch graph. |
 
-Within this repo you can also run it via `npm run generate -- --from <ref> --user <you>`.
+Within this repo you can also run it via `npm run generate -- --user <you>`
+(add `--from <ref>` to scope to a range).
 
 ### GitHub Actions example
 
-`fetch-depth: 0` is **required** — a shallow checkout has no history, so `from..to`
-can't be resolved.
+`fetch-depth: 0` is **required** — a shallow checkout has no history, so the
+commit range (and the root commit) can't be resolved.
 
 ```yaml
 name: contribution-badge
@@ -123,12 +127,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0        # full history — from..to needs it
+          fetch-depth: 0        # full history — the range needs it
       - uses: actions/setup-node@v5
         with: { node-version: 22 }
       - run: >
           npx --yes git+https://github.com/KilianSen/gitproof.git
-          --repo . --from v1.0.0 --to HEAD
+          --repo . --to HEAD
           --user ${{ github.actor }} --out docs/contrib.svg
       - name: Commit badge if changed
         run: |
@@ -149,7 +153,7 @@ run it (bare-metal git needs no clone since the repo is local):
 
 ```sh
 docker run --rm -v "$PWD:/repo" -e GITPROOF_ALLOWED_REPOS=/repo gitproof \
-  node dist/cli.js --repo /repo --from v1.0.0 --to HEAD \
+  node dist/cli.js --repo /repo --to HEAD \
   --user you@example.com --out /repo/docs/contrib.svg
 ```
 
@@ -158,7 +162,8 @@ docker run --rm -v "$PWD:/repo" -e GITPROOF_ALLOWED_REPOS=/repo gitproof \
 - `src/git.ts` resolves the repo, keeps a **bare clone cache** under
   `~/.cache/gitproof` (full history, no working tree — cheap on disk
   even for huge repos), fetches to refresh, and runs
-  `git log <from>..<to> --author=<user> --numstat` to collect per-file churn.
+  `git log <from>..<to> --author=<user> --numstat` (or just `<to>` for the
+  whole repo) to collect per-file churn.
 - `src/languages.ts` maps paths to languages for the breakdown.
 - `src/render.ts` hand-builds a self-contained SVG (its own background, system
   fonts, no external assets — so it renders identically on any Markdown host).

@@ -219,24 +219,31 @@ function assertRef(ref: string, name: string): void {
 /**
  * Collect the user's commits in `from..to` (from exclusive, to inclusive).
  * `user` is matched case-insensitively against author name AND email.
+ *
+ * `from` is optional: omit it to cover the entire history reachable from `to`,
+ * root commit included. (git's `from..to` excludes `from`, and there's no ref
+ * meaning "before the first commit", so whole-repo needs the single-ended range
+ * `to` rather than `from..to`.)
  */
 export async function collectStats(params: {
   repo: string;
-  from: string;
+  from?: string;
   to: string;
   user: string;
   squashOthers?: boolean;
 }): Promise<ContributionStats> {
-  const { from, to, user } = params;
+  const { to, user } = params;
+  const from = (params.from ?? "").trim();
   const squashOthers = params.squashOthers ?? true;
-  assertRef(from, "from");
+  if (from) assertRef(from, "from");
   assertRef(to, "to");
   if (!user.trim()) throw new BadRequestError("`user` is required");
 
   const resolved = resolveRepo(params.repo);
   const git = await ensureRepo(resolved);
 
-  const range = `${from}..${to}`;
+  // No `from` → single-ended range `to`, which includes the root commit.
+  const range = from ? `${from}..${to}` : to;
   const format = `${RECORD_SEP}%H|%an|%ae|%aI`;
 
   let raw: string;
@@ -262,7 +269,8 @@ export async function collectStats(params: {
   }
 
   const [fromCommit, toCommit, graph] = await Promise.all([
-    resolveCommitRef(git, from),
+    // No `from` → show the repo's root commit as the starting bound.
+    from ? resolveCommitRef(git, from) : resolveRootCommitRef(git, to),
     resolveCommitRef(git, to),
     buildGraph(git, range, user, squashOthers),
   ]);
@@ -271,7 +279,8 @@ export async function collectStats(params: {
   return aggregate({
     commits,
     user,
-    from,
+    // Fall back to the resolved root's sha so the empty-state text reads well.
+    from: from || fromCommit?.shortSha || "",
     to,
     repoLabel: resolved.label,
     fileBlobBase: resolved.webBlobBase,
@@ -491,6 +500,25 @@ async function resolveCommitRef(
     const [shortSha, date, subject] = out.trim().split(UNIT_SEP);
     if (!shortSha) return null;
     return { shortSha, date: new Date(date ?? 0), subject: subject ?? "" };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The root commit reachable from `to`, for whole-repo mode's starting bound.
+ * `--max-parents=0` lists parentless commits newest-first; take the last
+ * (oldest) so multi-root histories still point at the true first commit.
+ */
+async function resolveRootCommitRef(
+  git: SimpleGit,
+  to: string,
+): Promise<CommitRef | null> {
+  try {
+    const out = await git.raw(["rev-list", "--max-parents=0", to]);
+    const roots = out.trim().split("\n").filter(Boolean);
+    const root = roots[roots.length - 1];
+    return root ? resolveCommitRef(git, root) : null;
   } catch {
     return null;
   }

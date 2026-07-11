@@ -16,11 +16,12 @@ import { renderSVG } from "./render.js";
 const USAGE = `gitproof — generate a contribution SVG to a file
 
 Usage:
-  gitproof --from <ref> --user <name|email> [options]
+  gitproof --user <name|email> [options]
 
 Options:
   --repo <owner/repo|url|path>  Repo to analyze (default: ".", the checkout).
-  --from <ref>                  Start ref, exclusive.            [required]
+  --from <ref>                  Start ref, exclusive. Omit for the whole
+                                history, root commit included.
   --to <ref>                    End ref, inclusive (default: "HEAD").
   --user <name|email>           Author to match, case-insensitive. [required]
   --out, -o <file>              Output path (default: "gitproof.svg").
@@ -31,8 +32,9 @@ Options:
 Every flag falls back to an env var: GITPROOF_REPO, GITPROOF_FROM, GITPROOF_TO,
 GITPROOF_USER, GITPROOF_OUT, GITPROOF_FILES, GITPROOF_OTHERS.
 
-Example:
-  gitproof --repo . --from v1.0.0 --to HEAD --user me@uni.edu --out docs/contrib.svg`;
+Examples:
+  gitproof --user me@uni.edu --out docs/contrib.svg          # whole repo
+  gitproof --from v1.0.0 --to HEAD --user me@uni.edu          # a range`;
 
 function fail(msg: string): never {
   console.error(`gitproof: ${msg}\n`);
@@ -73,7 +75,7 @@ async function main(): Promise<void> {
   const filesRaw = (values.files as string) ?? env.GITPROOF_FILES;
   const othersRaw = (values.others as string) ?? env.GITPROOF_OTHERS;
 
-  if (!from) fail("`--from` is required");
+  // `--from` is optional: omitted means the whole history (root included).
   if (!user) fail("`--user` is required");
 
   // Same parsing rules as the HTTP handler in index.ts.
