@@ -1,0 +1,19 @@
+services:
+  gitproof:
+    build: .
+    image: gitproof
+    ports:
+      - "8787:8787"
+    environment:
+      PORT: "8787"
+      # Restrict which repos this instance will clone (glob or prefix, comma-sep).
+      # GITPROOF_ALLOWED_REPOS: "github.com/myorg/*"
+      # Override the file-link base for self-hosted forges:
+      # GITPROOF_WEB_BASE: "https://git.mycompany.com/myorg/thesis/blob"
+    volumes:
+      # Persist the bare-clone cache across restarts.
+      - gitproof-cache:/data
+    restart: unless-stopped
+
+volumes:
+  gitproof-cache:
