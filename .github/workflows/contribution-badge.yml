@@ -1,0 +1,58 @@
+name: contribution-badge
+
+# Regenerate this repo's own contribution card with gitproof and commit it back.
+on:
+  push:
+    branches: [main]
+    # Don't retrigger on the bot's own badge commit (belt-and-braces with the
+    # `[skip ci]` in the commit message below).
+    paths-ignore:
+      - "assets/contribution.svg"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# If several pushes land quickly, only the latest badge run needs to finish.
+concurrency:
+  group: contribution-badge
+  cancel-in-progress: true
+
+jobs:
+  badge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # full history — gitproof's from..to range needs it
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      # This workflow lives in gitproof's own repo, so run the tool straight
+      # from the checkout — no need to fetch it. `4b825dc…` is git's empty-tree
+      # object: an exclusive `from` before the root commit, so the range covers
+      # the entire history.
+      - name: Generate contribution card
+        run: |
+          npm ci
+          npm run generate -- \
+            --repo . \
+            --from 4b825dc642cb6eb9a060e54bf8d69288fbee4904 \
+            --to HEAD \
+            --user "${{ github.repository_owner }}" \
+            --out assets/contribution.svg
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/contribution.svg
+          if git diff --cached --quiet; then
+            echo "Badge unchanged — nothing to commit."
+          else
+            git commit -m "chore: update contribution card [skip ci]"
+            git push
+          fi

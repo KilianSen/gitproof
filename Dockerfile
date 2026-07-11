@@ -4,7 +4,9 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+# --ignore-scripts: skip the `prepare` build here (src isn't present yet); the
+# explicit `npm run build` below compiles once src/tsconfig are copied.
+RUN npm ci --ignore-scripts
 COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
@@ -16,7 +18,7 @@ RUN apk add --no-cache git ca-certificates
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY --from=build /app/dist ./dist
 
 ENV PORT=8787 \

@@ -4,6 +4,9 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "lib": ["ES2022"],
+    // Explicit so the TS 7 native compiler loads @types/node (it doesn't
+    // auto-include ambient @types the way tsc 5.x did).
+    "types": ["node"],
     "outDir": "dist",
     "rootDir": "src",
     "strict": true,

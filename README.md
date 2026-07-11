@@ -4,6 +4,10 @@ A tiny HTTP microservice that renders a single user's git contributions between
 two commits as an **embeddable SVG** — built to make a thesis contribution to a
 large open-source repo legible at a glance for a supervisor.
 
+<!-- This card is gitproof rendering its own repo, refreshed on every push by
+     .github/workflows/contribution-badge.yml — see "Generate a static SVG (CI)" below. -->
+![gitproof's own contribution card](assets/contribution.svg)
+
 You point it at a repo, a `from` commit, a `to` commit, and a user, and it
 returns a self-contained SVG card:
 
@@ -75,6 +79,80 @@ Examples:
 
 Other routes: `GET /healthz` (liveness), `GET /` (usage text).
 
+## Generate a static SVG (CI)
+
+Instead of serving the card live, you can render it **once to a file** and commit
+it into the repo — no running service required. The CLI takes the same inputs as
+the endpoint:
+
+```sh
+# The git+https URL forces an anonymous HTTPS clone (the `github:` shorthand
+# resolves to SSH, which unauthenticated CI runners can't use).
+npx --yes git+https://github.com/KilianSen/gitproof.git \
+  --repo . --from v1.0.0 --to HEAD --user you@example.com --out docs/contrib.svg
+```
+
+| Flag | Env fallback | Default | Meaning |
+|------|--------------|---------|---------|
+| `--repo` | `GITPROOF_REPO` | `.` | `owner/repo`, git URL, or local path — usually the checkout. |
+| `--from` | `GITPROOF_FROM` | *(required)* | Start ref, **exclusive**. |
+| `--to` | `GITPROOF_TO` | `HEAD` | End ref, **inclusive**. |
+| `--user` | `GITPROOF_USER` | *(required)* | Author, matched case-insensitively (name + email). |
+| `--out`, `-o` | `GITPROOF_OUT` | `gitproof.svg` | Output path (parent dirs are created). |
+| `--files` | `GITPROOF_FILES` | `all` | Cap the file list to N. |
+| `--others` | `GITPROOF_OTHERS` | `squash` | `hide` drops other contributors from the branch graph. |
+
+Within this repo you can also run it via `npm run generate -- --from <ref> --user <you>`.
+
+### GitHub Actions example
+
+`fetch-depth: 0` is **required** — a shallow checkout has no history, so `from..to`
+can't be resolved.
+
+```yaml
+name: contribution-badge
+on:
+  push: { branches: [main] }
+  workflow_dispatch:
+
+jobs:
+  badge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # to push the regenerated SVG back
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0        # full history — from..to needs it
+      - uses: actions/setup-node@v5
+        with: { node-version: 22 }
+      - run: >
+          npx --yes git+https://github.com/KilianSen/gitproof.git
+          --repo . --from v1.0.0 --to HEAD
+          --user ${{ github.actor }} --out docs/contrib.svg
+      - name: Commit badge if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/contrib.svg
+          git diff --cached --quiet || git commit -m "chore: update contribution badge"
+          git push
+```
+
+Embed the committed file with a repo-relative path:
+`![contribution](docs/contrib.svg)`. (Per the clickable-links caveat above, a
+Markdown `![]()` embed renders as an `<img>`, so the per-file links won't be
+live on a README — link to the SVG or use `<object>` where you need them.)
+
+Prefer containers? The published image ships the same CLI — mount the repo and
+run it (bare-metal git needs no clone since the repo is local):
+
+```sh
+docker run --rm -v "$PWD:/repo" -e GITPROOF_ALLOWED_REPOS=/repo gitproof \
+  node dist/cli.js --repo /repo --from v1.0.0 --to HEAD \
+  --user you@example.com --out /repo/docs/contrib.svg
+```
+
 ## How it works
 
 - `src/git.ts` resolves the repo, keeps a **bare clone cache** under
@@ -85,7 +163,9 @@ Other routes: `GET /healthz` (liveness), `GET /` (usage text).
 - `src/render.ts` hand-builds a self-contained SVG (its own background, system
   fonts, no external assets — so it renders identically on any Markdown host).
 - `src/index.ts` is the Hono server; bad refs/repos return a 400 error-SVG,
-  unknown users render a clean empty-state card.
+  unknown users render a clean empty-state card. `src/cli.ts` is the second entry
+  point: it drives the same `collectStats` → `renderSVG` pipeline but writes the
+  result to a file instead of serving it.
 
 ## Configuration
 
