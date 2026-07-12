@@ -128,7 +128,10 @@ function tiles(y: number, stats: ContributionStats): string {
 }
 
 // ---------------------------------------------------------------------------
-// Commits over time (area chart) + at-a-glance activity facts
+// Activity: commit calendar heatmap + at-a-glance facts + hour-of-day strip.
+// One block folding what used to be the area chart, the calendar, and the
+// punchcard: the heatmap carries the timeline + weekday axes, the strip carries
+// the hour axis. (The weekday×hour joint the old punchcard showed is dropped.)
 // ---------------------------------------------------------------------------
 
 function sundayOnOrBefore(d: Date): Date {
@@ -162,110 +165,108 @@ function activityFacts(stats: ContributionStats): ActivityFacts | null {
   return { activeDays: stats.days.length, busiest, longest };
 }
 
-/** Continuous commit buckets across the range — daily if short, weekly if long. */
-function buildSeries(stats: ContributionStats): {
-  buckets: { t: number; count: number }[];
-  byWeek: boolean;
-} {
+function activitySection(y: number, stats: ContributionStats): { svg: string; height: number } {
+  if (!stats.firstDate || !stats.lastDate) return { svg: "", height: 0 };
+  const parts: string[] = [sectionLabel(PAD, y, "Activity")];
+
+  // --- Commit calendar heatmap (weeks × weekdays) ---
+  const firstMs = startOfDayMs(stats.firstDate);
+  const lastMs = startOfDayMs(stats.lastDate);
   const counts = new Map<number, number>();
   for (const d of stats.days) counts.set(startOfDayMs(d.date), d.commits);
+  const maxC = Math.max(1, ...stats.days.map((d) => d.commits));
 
-  const first = startOfDayMs(stats.firstDate!);
-  const last = startOfDayMs(stats.lastDate!);
-  const byWeek = (last - first) / DAY_MS > 35;
+  const col0 = sundayOnOrBefore(stats.firstDate).getTime();
+  const colLast = sundayOnOrBefore(stats.lastDate).getTime();
+  const weeks = Math.round((colLast - col0) / (7 * DAY_MS)) + 1;
 
-  const buckets: { t: number; count: number }[] = [];
-  if (byWeek) {
-    const end = sundayOnOrBefore(stats.lastDate!).getTime();
-    for (let t = sundayOnOrBefore(stats.firstDate!).getTime(); t <= end; t += 7 * DAY_MS) {
-      let c = 0;
-      for (let k = 0; k < 7; k++) c += counts.get(t + k * DAY_MS) ?? 0;
-      buckets.push({ t, count: c });
-    }
-  } else {
-    for (let t = first; t <= last; t += DAY_MS) buckets.push({ t, count: counts.get(t) ?? 0 });
-  }
-  return { buckets, byWeek };
-}
+  const leftPad = 34;
+  const gap = 2;
+  const cell = Math.max(4, Math.min(12, Math.floor((CONTENT_W - leftPad - (weeks - 1) * gap) / weeks)));
+  const step = cell + gap;
+  const gridX = PAD + leftPad;
+  const gridTop = y + 20;
 
-function commitsChart(y: number, stats: ContributionStats): { svg: string; height: number } {
-  if (!stats.firstDate || !stats.lastDate) return { svg: "", height: 0 };
+  // Additive green: darker = more commits that day; empty days stay hairline.
+  const shade = (c: number) =>
+    c === 0 ? C.hair : `rgba(63,185,80,${(0.28 + 0.72 * (c / maxC)).toFixed(2)})`;
 
-  const { buckets, byWeek } = buildSeries(stats);
-  const n = buckets.length;
-  const chartH = 96;
-  const top = y;
-  const bottom = y + chartH;
-  const left = PAD;
-  const w = CONTENT_W;
-  const maxC = Math.max(1, ...buckets.map((b) => b.count));
-  const headroom = 12;
-
-  const xAt = (i: number) => (n <= 1 ? left + w / 2 : left + (i / (n - 1)) * w);
-  const yAt = (c: number) => bottom - (c / maxC) * (chartH - headroom);
-
-  const pts = buckets.map((b, i) => [xAt(i), yAt(b.count)] as const);
-  const linePath = pts.map(([x, yy], i) => `${i ? "L" : "M"}${x.toFixed(1)} ${yy.toFixed(1)}`).join(" ");
-  const areaPath =
-    `M${xAt(0).toFixed(1)} ${bottom} ` +
-    pts.map(([x, yy]) => `L${x.toFixed(1)} ${yy.toFixed(1)}`).join(" ") +
-    ` L${xAt(n - 1).toFixed(1)} ${bottom} Z`;
-
-  const grad = `<linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
-    <stop offset="0" stop-color="${C.green}" stop-opacity="0.32"/>
-    <stop offset="1" stop-color="${C.green}" stop-opacity="0.02"/></linearGradient>`;
-  const baseline = `<line x1="${left}" y1="${bottom}" x2="${left + w}" y2="${bottom}" stroke="${C.hair}"/>`;
-  const area = `<path d="${areaPath}" fill="url(#areaGrad)"/>`;
-  const line = `<path d="${linePath}" fill="none" stroke="${C.green}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
-
-  const dots =
-    n <= 24
-      ? buckets
-          .map((b, i) =>
-            b.count > 0
-              ? `<circle cx="${xAt(i).toFixed(1)}" cy="${yAt(b.count).toFixed(1)}" r="2.6" fill="${C.green}" stroke="${C.bg}" stroke-width="1.5"><title>${esc(
-                  shortDate(new Date(b.t)),
-                )}${byWeek ? " (week of)" : ""}: ${b.count} commit${b.count === 1 ? "" : "s"}</title></circle>`
-              : "",
-          )
-          .join("")
-      : "";
-
-  let lastMonth = -1;
-  const ticks = buckets
-    .map((b, i) => {
-      const d = new Date(b.t);
-      const m = d.getUTCMonth();
-      if (m === lastMonth) return "";
-      lastMonth = m;
-      return text(xAt(i), bottom + 16, d.toLocaleDateString("en-US", { month: "short", timeZone: "UTC" }), {
-        size: 10,
+  let cells = "";
+  let months = "";
+  for (let w = 0; w < weeks; w++) {
+    const colDate = new Date(col0 + w * 7 * DAY_MS);
+    // Label a month once, at the week that contains its 1st — avoids labelling
+    // (and overlapping on) the stub column that trails off the previous month.
+    if (colDate.getUTCDate() <= 7) {
+      months += text(gridX + w * step, gridTop - 6, colDate.toLocaleDateString("en-US", { month: "short", timeZone: "UTC" }), {
+        size: 9,
         fill: C.mut,
-        anchor: i === 0 ? "start" : "middle",
       });
-    })
+    }
+    for (let d = 0; d < 7; d++) {
+      const t = col0 + (w * 7 + d) * DAY_MS;
+      if (t < firstMs || t > lastMs) continue;
+      const c = counts.get(t) ?? 0;
+      const title = c > 0 ? `<title>${esc(shortDate(new Date(t)))}: ${c} commit${c === 1 ? "" : "s"}</title>` : "";
+      cells += `<rect x="${gridX + w * step}" y="${gridTop + d * step}" width="${cell}" height="${cell}" rx="2" fill="${shade(c)}">${title}</rect>`;
+    }
+  }
+  const weekdayLabels = [
+    [1, "Mon"],
+    [3, "Wed"],
+    [5, "Fri"],
+  ]
+    .map(([i, l]) => text(PAD, gridTop + (i as number) * step + cell - 1, l as string, { size: 9, fill: C.mut }))
     .join("");
+  const peak = text(PAD + CONTENT_W, y, `peak ${maxC}/day`, { size: 10, fill: C.dim, anchor: "end" });
+  parts.push(months, weekdayLabels, cells, peak);
 
-  const peak = text(left + w, top + 8, `peak ${maxC}/${byWeek ? "wk" : "day"}`, {
-    size: 10,
-    fill: C.dim,
-    anchor: "end",
-  });
+  let cy = gridTop + 7 * step + 6;
 
+  // --- At-a-glance facts ---
   const f = activityFacts(stats);
-  // Non-breaking spaces: SVG text collapses ordinary runs of whitespace.
-  const sep = `<tspan fill="${C.dim}">  ·  </tspan>`;
-  const summary = f
-    ? `<text x="${left}" y="${bottom + 40}" font-family="${FONT}" font-size="12" fill="${C.mut}">` +
-      `<tspan fill="${C.strong}" font-weight="600">${f.activeDays}</tspan> active days${sep}` +
-      `busiest <tspan fill="${C.strong}" font-weight="600">${esc(shortDate(f.busiest.date).replace(/, \d+$/, ""))}</tspan> (${f.busiest.commits})${sep}` +
-      `longest streak <tspan fill="${C.strong}" font-weight="600">${f.longest}</tspan> day${f.longest === 1 ? "" : "s"}</text>`
-    : "";
+  if (f) {
+    const sep = `<tspan fill="${C.dim}">  ·  </tspan>`;
+    parts.push(
+      `<text x="${PAD}" y="${cy + 10}" font-family="${FONT}" font-size="12" fill="${C.mut}">` +
+        `<tspan fill="${C.strong}" font-weight="600">${f.activeDays}</tspan> active days${sep}` +
+        `busiest <tspan fill="${C.strong}" font-weight="600">${esc(shortDate(f.busiest.date).replace(/, \d+$/, ""))}</tspan> (${f.busiest.commits})${sep}` +
+        `longest streak <tspan fill="${C.strong}" font-weight="600">${f.longest}</tspan> day${f.longest === 1 ? "" : "s"}</text>`,
+    );
+    cy += 22;
+  }
 
-  return {
-    svg: grad + baseline + area + line + dots + ticks + peak + summary,
-    height: bottom + 40 - y + 8,
-  };
+  // --- Hour-of-day strip (punchcard folded over weekdays, author-local) ---
+  const hourTotals = new Array<number>(24).fill(0);
+  for (const row of stats.punchcard ?? []) {
+    for (let h = 0; h < 24; h++) hourTotals[h] = (hourTotals[h] ?? 0) + (row[h] ?? 0);
+  }
+  if (hourTotals.some((v) => v > 0)) {
+    cy += 8;
+    parts.push(text(PAD, cy, "commits by hour · author-local", { size: 10, fill: C.dim }));
+    const stripTop = cy + 6;
+    const stripH = 24;
+    const stripBase = stripTop + stripH;
+    const hmax = Math.max(1, ...hourTotals);
+    const cw = CONTENT_W / 24;
+    const bw = cw - 3;
+    let bars = "";
+    for (let h = 0; h < 24; h++) {
+      const v = hourTotals[h] ?? 0;
+      const bh = (v / hmax) * stripH;
+      const bx = PAD + h * cw;
+      bars += `<rect x="${bx.toFixed(1)}" y="${(stripBase - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, bh).toFixed(1)}" rx="2" fill="${C.green}"><title>${String(h).padStart(2, "0")}:00 — ${v} commit${v === 1 ? "" : "s"}</title></rect>`;
+    }
+    const baseline = `<line x1="${PAD}" y1="${stripBase}" x2="${PAD + CONTENT_W}" y2="${stripBase}" stroke="${C.hair}"/>`;
+    let ticks = "";
+    for (const h of [0, 6, 12, 18, 23]) {
+      ticks += text(PAD + h * cw + cw / 2, stripBase + 13, `${h}h`, { size: 9, fill: C.dim, anchor: "middle" });
+    }
+    parts.push(baseline, bars, ticks);
+    cy = stripBase + 15;
+  }
+
+  return { svg: parts.join(""), height: cy - y };
 }
 
 // ---------------------------------------------------------------------------
@@ -623,120 +624,6 @@ function filesSection(
 }
 
 // ---------------------------------------------------------------------------
-// Commit calendar (GitHub-style weeks × weekdays heatmap)
-// ---------------------------------------------------------------------------
-
-function calendarSection(y: number, stats: ContributionStats): { svg: string; height: number } {
-  if (!stats.firstDate || !stats.lastDate) return { svg: "", height: 0 };
-  const first = startOfDayMs(stats.firstDate);
-  const last = startOfDayMs(stats.lastDate);
-  // Short ranges are already covered by the area chart above.
-  if ((last - first) / DAY_MS < 10) return { svg: "", height: 0 };
-
-  const counts = new Map<number, number>();
-  for (const d of stats.days) counts.set(startOfDayMs(d.date), d.commits);
-  const maxC = Math.max(1, ...stats.days.map((d) => d.commits));
-
-  const col0 = sundayOnOrBefore(stats.firstDate).getTime();
-  const colLast = sundayOnOrBefore(stats.lastDate).getTime();
-  const weeks = Math.round((colLast - col0) / (7 * DAY_MS)) + 1;
-
-  const leftPad = 34;
-  const gap = 2;
-  const cell = Math.max(4, Math.min(12, Math.floor((CONTENT_W - leftPad - (weeks - 1) * gap) / weeks)));
-  const step = cell + gap;
-  const gridX = PAD + leftPad;
-  const gridTop = y + 20;
-
-  // Additive green: darker = more commits that day, empty days stay hairline.
-  const shade = (c: number) =>
-    c === 0 ? C.hair : `rgba(63,185,80,${(0.28 + 0.72 * (c / maxC)).toFixed(2)})`;
-
-  let cells = "";
-  let months = "";
-  for (let w = 0; w < weeks; w++) {
-    const colDate = new Date(col0 + w * 7 * DAY_MS);
-    // Label a month once, at the week that contains its 1st — avoids labelling
-    // (and overlapping on) the stub column that trails off the previous month.
-    if (colDate.getUTCDate() <= 7) {
-      months += text(gridX + w * step, gridTop - 6, colDate.toLocaleDateString("en-US", { month: "short", timeZone: "UTC" }), {
-        size: 9,
-        fill: C.mut,
-      });
-    }
-    for (let d = 0; d < 7; d++) {
-      const t = col0 + (w * 7 + d) * DAY_MS;
-      if (t < first || t > last) continue;
-      const c = counts.get(t) ?? 0;
-      const cx = gridX + w * step;
-      const cy = gridTop + d * step;
-      const title = c > 0 ? `<title>${esc(shortDate(new Date(t)))}: ${c} commit${c === 1 ? "" : "s"}</title>` : "";
-      cells += `<rect x="${cx}" y="${cy}" width="${cell}" height="${cell}" rx="2" fill="${shade(c)}">${title}</rect>`;
-    }
-  }
-
-  const weekdayLabels = [
-    [1, "Mon"],
-    [3, "Wed"],
-    [5, "Fri"],
-  ]
-    .map(([i, l]) => text(PAD, gridTop + (i as number) * step + cell - 1, l as string, { size: 9, fill: C.mut }))
-    .join("");
-
-  return {
-    svg: sectionLabel(PAD, y, "Commit calendar") + months + weekdayLabels + cells,
-    height: gridTop + 7 * step - y,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Punchcard (weekday × hour, dot size ∝ commits)
-// ---------------------------------------------------------------------------
-
-function punchcardSection(y: number, stats: ContributionStats): { svg: string; height: number } {
-  if (stats.commitCount < 5) return { svg: "", height: 0 };
-  const pc = stats.punchcard ?? [];
-  const max = Math.max(1, ...pc.flat());
-
-  const leftPad = 34;
-  const gridX = PAD + leftPad;
-  const colW = (CONTENT_W - leftPad) / 24;
-  const rowGap = 16;
-  const gridTop = y + 22;
-  const maxR = Math.min(colW, rowGap) / 2 - 1;
-  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const rowOrder = [1, 2, 3, 4, 5, 6, 0]; // Mon first, weekend at the bottom
-
-  let dots = "";
-  rowOrder.forEach((wd, ri) => {
-    const cy = gridTop + ri * rowGap;
-    dots += text(PAD, cy + 3, dayNames[wd] ?? "", { size: 9, fill: C.mut });
-    const row = pc[wd] ?? [];
-    for (let hr = 0; hr < 24; hr++) {
-      const c = row[hr] ?? 0;
-      if (c === 0) continue;
-      const r = Math.max(1.3, Math.sqrt(c / max) * maxR);
-      const cx = gridX + hr * colW + colW / 2;
-      dots += `<circle cx="${cx.toFixed(1)}" cy="${cy}" r="${r.toFixed(1)}" fill="${C.green}"><title>${dayNames[wd]} ${String(hr).padStart(2, "0")}:00 — ${c} commit${c === 1 ? "" : "s"}</title></circle>`;
-    }
-  });
-
-  let axis = "";
-  for (const hr of [0, 6, 12, 18, 23]) {
-    axis += text(gridX + hr * colW + colW / 2, gridTop + 7 * rowGap - 1, `${hr}h`, {
-      size: 9,
-      fill: C.dim,
-      anchor: "middle",
-    });
-  }
-
-  return {
-    svg: sectionLabel(PAD, y, "When the commits happen") + dots + axis,
-    height: gridTop + 7 * rowGap + 6 - y,
-  };
-}
-
-// ---------------------------------------------------------------------------
 // Where the work landed (churn by top-level directory)
 // ---------------------------------------------------------------------------
 
@@ -868,16 +755,8 @@ export function renderSVG(stats: ContributionStats, opts: RenderOptions = {}): s
   const range = rangeSection(y, stats);
   if (range.height) y += range.height + 26;
 
-  const chartHead = sectionLabel(PAD, y, "Commits over time");
-  y += 12;
-  const chart = commitsChart(y, stats);
-  y += chart.height + 24;
-
-  const calendar = calendarSection(y, stats);
-  if (calendar.height) y += calendar.height + 28;
-
-  const punchcard = punchcardSection(y, stats);
-  if (punchcard.height) y += punchcard.height + 28;
+  const activity = activitySection(y, stats);
+  if (activity.height) y += activity.height + 28;
 
   const graph = graphSection(y, stats);
   if (graph.height) y += graph.height + 28;
@@ -901,10 +780,7 @@ export function renderSVG(stats: ContributionStats, opts: RenderOptions = {}): s
     h.svg,
     t,
     range.svg,
-    chartHead,
-    chart.svg,
-    calendar.svg,
-    punchcard.svg,
+    activity.svg,
     graph.svg,
     diff.svg,
     sizes.svg,

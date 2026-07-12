@@ -13,12 +13,10 @@ returns a self-contained SVG card:
 
 - **Headline totals** — commits, files changed, lines added, lines removed
 - **Commit range** — the exact `from`/`to` bounds (short SHA · date · subject)
-- **Commits over time** — a filled area chart (daily buckets for short ranges,
-  weekly for long) with active-days / busiest-day / longest-streak facts
-- **Commit calendar** — a GitHub-style weeks × weekdays heatmap (shown for
-  ranges longer than ~10 days)
-- **When the commits happen** — a weekday × hour punchcard in the author's own
-  timezone, dot size ∝ commits (shown from 5 commits up)
+- **Activity** — a GitHub-style weeks × weekdays commit heatmap with
+  active-days / busiest-day / longest-streak facts, plus a commits-by-hour strip
+  (author-local time). One block covering *when across the span* (timeline +
+  weekday) and *when in a day* (hour)
 - **Branch graph** — your commits plus the merge commits that integrated them,
   in lanes. Runs of other contributors' commits are **squashed** into a single
   "⋯ N commits by others" node (a run shared by two paths collapses to one);
