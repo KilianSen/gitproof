@@ -10,6 +10,10 @@ export interface Commit {
   authorName: string;
   authorEmail: string;
   date: Date;
+  /** Hour of day (0–23) in the author's own timezone, for the punchcard. */
+  localHour: number;
+  /** Weekday (0=Sun…6=Sat) in the author's own timezone. */
+  localWeekday: number;
   files: FileChange[];
 }
 
@@ -26,6 +30,14 @@ export interface FileStat {
   additions: number;
   deletions: number;
   binary: boolean;
+}
+
+export interface DirStat {
+  /** Top-level path segment (e.g. `src`), or `(root)` for repo-root files. */
+  dir: string;
+  additions: number;
+  deletions: number;
+  files: number;
 }
 
 export interface CommitRef {
@@ -71,6 +83,12 @@ export interface ContributionStats {
   languages: LanguageStat[];
   /** Every changed file, most-churned first. */
   files: FileStat[];
+  /** Churn grouped by top-level directory, most-churned first. */
+  dirs: DirStat[];
+  /** commits[weekday 0=Sun…6=Sat][hour 0–23] in author-local time. */
+  punchcard: number[][];
+  /** Total lines changed (add+del) per commit, for the size histogram. */
+  commitSizes: number[];
   /**
    * Web base for per-file links, host-shaped so `${base}/${to}/${path}`
    * resolves (e.g. `https://github.com/o/r/blob`). Null when unknown/local.

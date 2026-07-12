@@ -15,12 +15,20 @@ returns a self-contained SVG card:
 - **Commit range** — the exact `from`/`to` bounds (short SHA · date · subject)
 - **Commits over time** — a filled area chart (daily buckets for short ranges,
   weekly for long) with active-days / busiest-day / longest-streak facts
+- **Commit calendar** — a GitHub-style weeks × weekdays heatmap (shown for
+  ranges longer than ~10 days)
+- **When the commits happen** — a weekday × hour punchcard in the author's own
+  timezone, dot size ∝ commits (shown from 5 commits up)
 - **Branch graph** — your commits plus the merge commits that integrated them,
   in lanes. Runs of other contributors' commits are **squashed** into a single
   "⋯ N commits by others" node (a run shared by two paths collapses to one);
   pass `others=hide` to drop them entirely instead
 - **Lines changed** — additions vs. deletions split
+- **Commit sizes** — histogram of lines-changed-per-commit (many small commits
+  vs. a few large ones; shown from 5 commits up)
 - **Language breakdown** — top languages by lines touched
+- **Where the work landed** — churn grouped by top-level directory (shown when
+  more than one directory was touched)
 - **Files changed** — every touched file with per-file `+A −D` and a diffstat
   meter, sorted by churn (cap with `files=N`); each row **links** to the file on
   its host (GitHub/GitLab/Bitbucket) at the `to` ref

@@ -11,6 +11,7 @@ import type {
   CommitRef,
   ContributionStats,
   DayBucket,
+  DirStat,
   FileChange,
   FileStat,
   GraphNode,
@@ -524,6 +525,19 @@ async function resolveRootCommitRef(
   }
 }
 
+/**
+ * Author-local hour/weekday straight from the `%aI` string. Reading the fields
+ * textually keeps the author's own wall-clock — `new Date(...).getHours()` would
+ * shift to UTC or the server's timezone and misplace the punchcard.
+ */
+function localHourWeekday(iso: string): { hour: number; weekday: number } {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2})/.exec(iso);
+  if (!m) return { hour: 0, weekday: 0 };
+  const [, y, mo, d, h] = m;
+  const weekday = new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d))).getUTCDay();
+  return { hour: Number(h), weekday };
+}
+
 function parseLog(raw: string): Commit[] {
   const commits: Commit[] = [];
   let current: Commit | null = null;
@@ -531,11 +545,14 @@ function parseLog(raw: string): Commit[] {
   for (const line of raw.split("\n")) {
     if (line.startsWith(RECORD_SEP)) {
       const [hash, an, ae, date] = line.slice(1).split("|");
+      const { hour, weekday } = localHourWeekday(date ?? "");
       current = {
         hash: hash ?? "",
         authorName: an ?? "",
         authorEmail: ae ?? "",
         date: new Date(date ?? 0),
+        localHour: hour,
+        localWeekday: weekday,
         files: [],
       };
       commits.push(current);
@@ -586,6 +603,11 @@ function aggregate(input: {
   const fileMap = new Map<string, FileStat>();
   const langMap = new Map<string, LanguageStat & { paths: Set<string> }>();
   const dayMap = new Map<string, DayBucket>();
+  // punchcard[weekday][hour]; commitSizes = per-commit total lines changed.
+  const punchcard: number[][] = Array.from({ length: 7 }, () =>
+    new Array<number>(24).fill(0),
+  );
+  const commitSizes: number[] = [];
 
   let firstDate: Date | null = null;
   let lastDate: Date | null = null;
@@ -593,6 +615,8 @@ function aggregate(input: {
   for (const c of commits) {
     if (!firstDate || c.date < firstDate) firstDate = c.date;
     if (!lastDate || c.date > lastDate) lastDate = c.date;
+
+    punchcard[c.localWeekday]![c.localHour]! += 1;
 
     const key = dayKey(c.date);
     const bucket =
@@ -602,10 +626,12 @@ function aggregate(input: {
         .get(key)!;
     bucket.commits += 1;
 
+    let commitTotal = 0;
     for (const f of c.files) {
       const np = normalizeRenamePath(f.path);
       additions += f.additions;
       deletions += f.deletions;
+      commitTotal += f.additions + f.deletions;
       bucket.additions += f.additions;
       bucket.deletions += f.deletions;
 
@@ -632,6 +658,7 @@ function aggregate(input: {
       ls.deletions += f.deletions;
       ls.paths.add(np);
     }
+    commitSizes.push(commitTotal);
   }
 
   // Active days only, ascending; the renderer fills the empty grid cells so we
@@ -657,6 +684,24 @@ function aggregate(input: {
       a.path.localeCompare(b.path),
   );
 
+  // Group churn by top-level path segment; root-level files fall under "(root)".
+  const dirMap = new Map<string, DirStat>();
+  for (const f of fileMap.values()) {
+    const slash = f.path.indexOf("/");
+    const dir = slash > 0 ? f.path.slice(0, slash) : "(root)";
+    const d =
+      dirMap.get(dir) ??
+      dirMap.set(dir, { dir, additions: 0, deletions: 0, files: 0 }).get(dir)!;
+    d.additions += f.additions;
+    d.deletions += f.deletions;
+    d.files += 1;
+  }
+  const dirs: DirStat[] = [...dirMap.values()].sort(
+    (a, b) =>
+      b.additions + b.deletions - (a.additions + a.deletions) ||
+      a.dir.localeCompare(b.dir),
+  );
+
   return {
     user,
     repoLabel,
@@ -671,6 +716,9 @@ function aggregate(input: {
     days,
     languages,
     files,
+    dirs,
+    punchcard,
+    commitSizes,
     fileBlobBase,
     fromCommit,
     toCommit,

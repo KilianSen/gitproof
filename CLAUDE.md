@@ -42,6 +42,8 @@ Two entry points share one pipeline: **`collectStats` (git → data) → `render
 - Hand-builds one SVG string top-to-bottom, **threading a mutable `y` cursor**: each section returns `{ svg, height }` and `renderSVG` advances `y` by the returned height plus a gap. When adding/reordering a section, add its height to `y` the same way or everything below it overlaps.
 - Fully self-contained by design: own background, system-font stacks, no external assets — so it renders identically on any Markdown host. Everything is dark-theme GitHub palette in the `C` object.
 - Chart bucketing switches daily→weekly past a 35-day span (`buildSeries`). File rows are wrapped in `<a>` with a transparent hit-rect for whole-row clicks; links point at `fileBlobBase` (derived per host in `git.ts`) at the `to` ref. Text budgets are computed from pixel estimates (`~6.9–7.4px`/char) — adjust these if font sizes change.
+- Several sections **self-hide via data guards** (each returns `{svg:"",height:0}`, and `renderSVG` only advances `y` when `height` is truthy): the commit calendar needs a >10-day span, the punchcard and commit-size histogram need ≥5 commits, the directory breakdown needs ≥2 touched dirs. So a card's section set depends on the input — don't assume all sections are present.
+- The punchcard is author-local: `git.ts` reads the hour/weekday textually from the `%aI` string (`localHourWeekday`), because `new Date(...).getHours()` would shift to UTC/server time and misplace the dots. `punchcard`/`dirs`/`commitSizes` are all precomputed in `aggregate` — render just draws them.
 - `zero commits` and `null firstDate/lastDate` are valid states that render a clean empty card, not errors.
 
 ### Server — `src/index.ts`
